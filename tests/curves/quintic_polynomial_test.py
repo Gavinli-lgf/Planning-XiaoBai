@@ -3,7 +3,7 @@ import sys
 
 import pathlib
 
-file_path = pathlib.Path(__file__)
+file_path = pathlib.Path(__file__).resolve()
 
 root_dir = file_path.parent.parent.parent
 sys.path.append(str(root_dir))
