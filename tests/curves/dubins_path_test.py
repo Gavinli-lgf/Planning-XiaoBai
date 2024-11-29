@@ -86,8 +86,8 @@ def plan_dubins_path(
         planning_funcs = [_PATH_TYPE_MAP[ptype] for ptype in selected_types]
 
     # calculate local goal x, y, yaw
-    l_rot = rot_mat_2d(s_yaw)
-    le_xy = np.stack([g_x - s_x, g_y - s_y]).T @ l_rot
+    l_rot = rot_mat_2d(s_yaw) # 生成一个绕z轴旋转s_yaw角的2*2旋转矩阵(疑问：旋转角不应该是始末点的朝向角吗,且要去负值？)
+    le_xy = np.stack([g_x - s_x, g_y - s_y]).T @ l_rot # 疑问：这里
     local_goal_x = le_xy[0]
     local_goal_y = le_xy[1]
     local_goal_yaw = g_yaw - s_yaw
@@ -309,6 +309,8 @@ def main():
     print("Dubins path planner sample start!!")
     for i in range(0, 5):
 
+        # 获取dubins曲线的7个初始量。在一定范围内随机生成起始点的x,y,yaw;曲率curvature.
+        # The uniform() method returns a random floating number between the two specified numbers (both included).
         start_x = random.uniform(-5, 5)  # [m]
         start_y = random.uniform(-5, 5)  # [m]
         start_yaw = np.deg2rad(random.uniform(-45, 45))  # [rad]
@@ -319,11 +321,14 @@ def main():
 
         curvature = random.uniform(0.1, 0.3)
 
+        # 获取dubins_path的结果
         path_x, path_y, path_yaw, mode, lengths = plan_dubins_path(
             start_x, start_y, start_yaw, end_x, end_y, end_yaw, curvature
         )
+        # 生成画图的范围
         x_min, x_max, y_min, y_max = get_axes_limits(path_x, path_y, path_yaw)
 
+        # 生成gif动图
         for i in range(0, len(path_x), max(int(len(path_x) / 40), 1)):
             plt.cla()
             plt.plot(
