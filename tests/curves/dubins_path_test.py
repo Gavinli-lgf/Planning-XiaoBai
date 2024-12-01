@@ -321,7 +321,7 @@ def main():
 
         curvature = random.uniform(0.1, 0.3)
 
-        # 获取dubins_path的结果
+        # 获取dubins_path的结果(离散后的结果)
         path_x, path_y, path_yaw, mode, lengths = plan_dubins_path(
             start_x, start_y, start_yaw, end_x, end_y, end_yaw, curvature
         )

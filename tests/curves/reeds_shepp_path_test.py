@@ -22,7 +22,7 @@ from common.plot_util import *
 from common.common_util import *
 from common.gif_creator import *
 
-
+# 定义一个path类（记录一个完成path所包含的信息）
 class Path:
     """
     Path data container
@@ -55,6 +55,9 @@ def mod2pi(x):
     return v
 
 
+# 输入：paths, travel_distances, steering_dirns, step_size
+# 功能：用求得的信息生成path对象，并校验path长度与是否已经存在相同的结果。校验通过后就将path加入paths(否则paths不变)
+# 输出：paths
 def set_path(paths, lengths, ctypes, step_size):
     path = Path()
     path.ctypes = ctypes
@@ -75,13 +78,14 @@ def set_path(paths, lengths, ctypes, step_size):
     paths.append(path)
     return paths
 
-
+# 将cartisian坐标(x,y)转换未极坐标(r,theta)
 def polar(x, y):
     r = math.hypot(x, y)
     theta = math.atan2(y, x)
     return r, theta
 
 
+# 输入转换与归一后的目标点(x,y,dth)
 def left_straight_left(x, y, phi):
     u, t = polar(x - math.sin(phi), y - 1.0 + math.cos(phi))
     if 0.0 <= t <= math.pi:
@@ -107,6 +111,7 @@ def left_straight_right(x, y, phi):
     return False, [], []
 
 
+# 输入:转换与归一后的目标点(x,y,dth); 输出3部分:bool,[每一段长度(正负表示前进/后退)],[运动方式]
 def left_x_right_x_left(x, y, phi):
     zeta = x - math.sin(phi)
     eeta = y - 1 + math.cos(phi)
@@ -285,7 +290,9 @@ def reflect(steering_directions):
     return [switch_dir(dirn) for dirn in steering_directions]
 
 
+# 计算出所有的46条path(未离散)
 def generate_path(q0, q1, max_curvature, step_size):
+    # 将初始点(x,y,yaw)转换为(0,0,0);并将各个长度参数对转弯半径做归一化处理。
     dx = q1[0] - q0[0]
     dy = q1[1] - q0[1]
     dth = q1[2] - q0[2]
@@ -295,6 +302,10 @@ def generate_path(q0, q1, max_curvature, step_size):
     y = (-s * dx + c * dy) * max_curvature
     step_size *= max_curvature
 
+    # 定义最终12种运动方式的求解方法函数的入口path_functions(输入转换与归一后的目标点(x,y,dth))
+    # 注：这12个函数的实现就是套公式了。
+    # 输入: 转换与归一后的目标点(x,y,dth); 
+    # 输出: bool,[每一段长度(正负表示前进/后退)],[运动方式];(3部分含义:flag,travel_distances,steering_dirns)
     paths = []
     path_functions = [
         left_straight_left,
@@ -311,6 +322,7 @@ def generate_path(q0, q1, max_curvature, step_size):
         left_x_right90_straight_left90_x_right,
     ]  # CCSCC
 
+    # 根据“时间翻转、反射、后向变换”来求解
     for path_func in path_functions:
         flag, travel_distances, steering_dirns = path_func(x, y, dth)
         if flag:
@@ -367,6 +379,8 @@ def generate_path(q0, q1, max_curvature, step_size):
     return paths
 
 
+# 输入：各段长度lengths,转换为弧度后的step_size
+# 输出：各段离散化后的list的list（即interpolate_dists_list中的对象也是list，每个list对应一段的离散）
 def calc_interpolate_dists_list(lengths, step_size):
     interpolate_dists_list = []
     for length in lengths:
@@ -375,9 +389,11 @@ def calc_interpolate_dists_list(lengths, step_size):
         interp_dists = np.append(interp_dists, length)
         interpolate_dists_list.append(interp_dists)
 
+    print(f"interpolate_dists_list shape: {len(interpolate_dists_list)}")
     return interpolate_dists_list
 
 
+# 在local coordinate下对path离散化
 def generate_local_course(lengths, modes, max_curvature, step_size):
     interpolate_dists_list = calc_interpolate_dists_list(
         lengths, step_size * max_curvature
@@ -403,6 +419,7 @@ def generate_local_course(lengths, modes, max_curvature, step_size):
     return xs, ys, yaws, directions
 
 
+# 
 def interpolate(dist, length, mode, max_curvature, origin_x, origin_y, origin_yaw):
     if mode == "S":
         x = origin_x + dist / max_curvature * math.cos(origin_yaw)
@@ -425,18 +442,21 @@ def interpolate(dist, length, mode, max_curvature, origin_x, origin_y, origin_ya
 
     return x, y, yaw, 1 if length > 0.0 else -1
 
-
+# 计算出所有的46条path，并对每条path进行离散化
 def calc_paths(sx, sy, syaw, gx, gy, gyaw, maxc, step_size):
     q0 = [sx, sy, syaw]
     q1 = [gx, gy, gyaw]
-
+    
+    # 计算出所有的46条path(未离散)
     paths = generate_path(q0, q1, maxc, step_size)
     for path in paths:
+        # 在local coordinate下对path离散化
         xs, ys, yaws, directions = generate_local_course(
             path.lengths, path.ctypes, maxc, step_size
         )
 
         # convert global coordinate
+        # 将离散后的local信息，转换为global信息
         path.x = [
             math.cos(-q0[2]) * ix + math.sin(-q0[2]) * iy + q0[0]
             for (ix, iy) in zip(xs, ys)
@@ -452,16 +472,19 @@ def calc_paths(sx, sy, syaw, gx, gy, gyaw, maxc, step_size):
 
     return paths
 
-
+# 根据输入的已知信息，计算所有共46条path，从中选出最短的path，并输出具体的离散后信息
 def reeds_shepp_path_planning(sx, sy, syaw, gx, gy, gyaw, maxc, step_size=0.2):
+    # 计算出所有的46条path，并返回
     paths = calc_paths(sx, sy, syaw, gx, gy, gyaw, maxc, step_size)
     if not paths:
         return None, None, None, None, None  # could not generate any path
 
     # search minimum cost path
+    # 找出46条path中的长度最小的path
     best_path_index = paths.index(min(paths, key=lambda p: abs(p.L)))
     b_path = paths[best_path_index]
 
+    # 返回最优path的具体信息(离散后的(x,y,yaw),ctypes,length)
     return b_path.x, b_path.y, b_path.yaw, b_path.ctypes, b_path.lengths
 
 
@@ -469,6 +492,7 @@ def main():
     print("Reeds Shepp path planner sample start!!")
 
     for i in range(0, 5):
+        # 输入：7个已知量start_x, start_y, start_yaw, end_x, end_y, end_yaw, curvature
         start_x = random.uniform(-5, 5)  # [m]
         start_y = random.uniform(-5, 5)  # [m]
         start_yaw = np.deg2rad(random.uniform(-45, 45))  # [rad]
@@ -480,9 +504,11 @@ def main():
         curvature = random.uniform(0.1, 0.3)
         step_size = 0.05
 
+        # 获取reeds shepp规划结果(按step_size离散化后的结果)
         xs, ys, yaws, modes, lengths = reeds_shepp_path_planning(
             start_x, start_y, start_yaw, end_x, end_y, end_yaw, curvature, step_size
         )
+        # 画图
         x_min, x_max, y_min, y_max = get_axes_limits(xs, ys, yaws)
 
         if not xs:
