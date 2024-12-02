@@ -14,6 +14,7 @@ from common.gif_creator import *
 from common.plot_util import *
 
 
+# 计算一阶雅可比矩阵
 def get_gradient(
     function: sm.core.expr.Expr,
     symbols: list[sm.core.symbol.Symbol],
@@ -40,6 +41,7 @@ def get_gradient(
     return gradient.astype(np.float64)  # Change data type to float
 
 
+# 计算二阶海森矩阵
 def get_hessian(
     function: sm.core.expr.Expr,
     symbols: list[sm.core.symbol.Symbol],
@@ -69,6 +71,7 @@ def get_hessian(
     return hessian.astype(np.float64)
 
 
+# 牛顿法
 def newton_method(
     function: sm.core.expr.Expr,
     symbols: list[sm.core.symbol.Symbol],
@@ -112,6 +115,7 @@ def newton_method(
     return solution, x_star
 
 
+# 梯度下降法
 def gradient_descent(
     function: sm.core.expr.Expr,
     symbols: list[sm.core.symbol.Symbol],
@@ -159,6 +163,7 @@ def rosenbrock_function(x, y):
     return 100 * (y - x**2) ** 2 + (1 - x) ** 2
 
 
+# 输入：待使用方法的函数名
 def optimize(method):
     x, y = sm.symbols("x y")
     symbols = [x, y]

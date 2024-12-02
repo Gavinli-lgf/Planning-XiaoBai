@@ -15,10 +15,12 @@ from common.gif_creator import *
 
 
 if __name__ == "__main__":
+    # 车辆初始状态
     start_p = Point()
     start_p.theta = pi / 2
     start_p.v = 2.0
     start_p.steer = -0.2
+    # 离散信息与总时间
     delta_t = 0.1
     total_t = 20.0
 
