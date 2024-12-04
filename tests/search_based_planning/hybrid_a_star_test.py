@@ -22,16 +22,18 @@ show_animation = True
 show_heuristic_animation = False
 
 ############################ Car Info ######################################
-WB = 3.0  # rear to front wheel
-W = 2.0  # width of car
-LF = 3.3  # distance from rear to vehicle front end
-LB = 1.0  # distance from rear to vehicle back end
-MAX_STEER = 0.6  # [rad] maximum steering angle
+WB = 3.0  # rear to front wheel (轴距)
+W = 2.0  # width of car (车宽)
+LF = 3.3  # distance from rear to vehicle front end (后轴中心到车前边沿)
+LB = 1.0  # distance from rear to vehicle back end (后轴中心到车后边沿)
+MAX_STEER = 0.6  # [rad] maximum steering angle (最大转向角)
 
-BUBBLE_DIST = (LF - LB) / 2.0  # distance from rear to center of vehicle.
-BUBBLE_R = np.hypot((LF + LB) / 2.0, W / 2.0)  # bubble radius
+# distance from rear to center of vehicle. (后轴中心到质心距离)
+BUBBLE_DIST = (LF - LB) / 2.0  
+# bubble radius. (车辆原地旋转半径，即车辆对角线长度的一半)
+BUBBLE_R = np.hypot((LF + LB) / 2.0, W / 2.0)  
 
-# vehicle rectangle vertices
+# vehicle rectangle vertices(车辆顶点，在后轴中心为原点的车身坐标系下的坐标，左前开始，顺时针方向。)
 VRX = [LF, LF, -LB, -LB, LF]
 VRY = [W / 2, -W / 2, -W / 2, W / 2, W / 2]
 
@@ -306,6 +308,8 @@ STEER_COST = 1.0  # steer angle change penalty cost
 H_COST = 5.0  # Heuristic cost
 
 
+# 定义hybrid A*的节点结构体：栅格索引(x,y,yaw),行驶方向(True:正向;False:倒车),
+# **列表(x,y,yaw),**方向,转角输入steer,父节点索引parent_index,代价cost.
 class Node:
     def __init__(
         self,
@@ -343,6 +347,9 @@ class Path:
         self.cost = cost
 
 
+# 输入：障碍物的坐标信息，xy方向的分辨率为2.0m，yaw的分辨率为15度
+# 输出：栅格化后地图的范围
+# 功能：按照给定的地图信息，x,y,yaw的分辨率将地图栅格化，同时也对栅格编号并输出栅格范围
 class Config:
     def __init__(self, ox, oy, xy_resolution, yaw_resolution):
         min_x_m = min(ox)
@@ -548,6 +555,9 @@ def calc_rs_path_cost(reed_shepp_path):
     return cost
 
 
+# 输入：始末点位姿，障碍物信息，xy方向的分辨率2.0m、yaw的分辨率15deg，
+# 输出：离散的路径点(每个点的位姿(x,y,yaw))
+# 功能：hybrid A*搜索.
 def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
     """
     start: start node
@@ -558,13 +568,17 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
     yaw_resolution: yaw angle resolution [rad]
     """
 
+    # 对始末位姿yaw归一化：输入rad，输出[-pi, pi)
     start[2], goal[2] = rs.pi_2_pi(start[2]), rs.pi_2_pi(goal[2])
     tox, toy = ox[:], oy[:]
 
+    # 将障碍物信息生成一个KDTree
     obstacle_kd_tree = cKDTree(np.vstack((tox, toy)).T)
 
+    # 将地图按xy方向分辨率2.0m，yaw分辨率15度，进行栅格化
     config = Config(tox, toy, xy_resolution, yaw_resolution)
 
+    # 建立hybrid A*图搜的始末节点Node
     start_node = Node(
         round(start[0] / xy_resolution),
         round(start[1] / xy_resolution),
@@ -587,8 +601,10 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
         [True],
     )
 
+    # hybrid A*图搜的待访问点(openList), 已访问点(closeList).
     openList, closedList = {}, {}
 
+    # 计算距离启发值h
     h_dp = calc_distance_heuristic(
         goal_node.x_list[-1], goal_node.y_list[-1], ox, oy, xy_resolution, BUBBLE_R
     )
@@ -706,6 +722,7 @@ def calc_index(node, c):
     return ind
 
 
+# 建立地图border_x,border_y记录边界坐标;ox,oy记录障碍物占据的坐标(相当于都是1*1的栅格)
 def construct_env_info():
     ox = []
     oy = []
@@ -749,11 +766,12 @@ def construct_env_info():
 def main():
     print("Start Hybrid A* planning")
 
-    # Set Initial parameters
+    # Set Initial parameters(设置始末点的位姿)
     start = [10.0, 10.0, np.deg2rad(90.0)]
     goal = [50.0, 50.0, np.deg2rad(-90.0)]
 
     # construct environment info.
+    # 建立地图border_x,border_y记录边界坐标;ox,oy记录障碍物占据的坐标(相当于都是1*1的栅格)
     border_x, border_y, ox, oy = construct_env_info()
 
     if show_animation:
@@ -767,10 +785,12 @@ def main():
         plt.grid(True)
         plt.axis("equal")
 
+    # 地图边界也当障碍物处理
     raw_ox = ox
     raw_oy = oy
     ox.extend(border_x)
     oy.extend(border_y)
+    # 输入障碍物信息，始末点位姿，xy方向的步长2.0m、yaw步长15deg，开始进行hybrid A*搜索.输出离散的路径点(位姿)
     path = hybrid_a_star_planning(
         start, goal, ox, oy, XY_GRID_RESOLUTION, YAW_GRID_RESOLUTION
     )

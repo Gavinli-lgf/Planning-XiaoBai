@@ -66,7 +66,7 @@ def rot_mat_2d(angle):
     """
     return Rot.from_euler("z", angle).as_matrix()[0:2, 0:2]
 
-
+# 角度取模运算，默认：弧度，[-pi, pi)；也可更改为：度，[0, 2pi)
 def angle_mod(x, zero_2_2pi=False, degree=False):
     """
     Angle modulo operation

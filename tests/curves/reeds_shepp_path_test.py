@@ -40,6 +40,7 @@ class Path:
         self.directions = []  # directions (1:forward, -1:backward)
 
 
+# 角度取模运算：输入rad，输出[-pi, pi)
 def pi_2_pi(x):
     return angle_mod(x)
 
