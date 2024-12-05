@@ -37,9 +37,9 @@ BUBBLE_R = np.hypot((LF + LB) / 2.0, W / 2.0)
 VRX = [LF, LF, -LB, -LB, LF]
 VRY = [W / 2, -W / 2, -W / 2, W / 2, W / 2]
 
-# 输入： x_list,y_list,yaw_list:rs曲线上每个离散点的位姿; ox,oy:实际地图; kd_tree:障碍物kd-tree;
+# 输入： x_list,y_list,yaw_list:待检测曲线上每个离散点的位姿; ox,oy:实际地图; kd_tree:障碍物kd-tree;
 # 输出： False:有碰撞; True:无碰撞
-# 功能： 将rs曲线上每个点转到质心，再取BUBBLE_R范围内的obs点，分别转换到车身坐标系下判碰(因此很耗时，TODO(lgf):看使用聪哥的方法会好在哪里??)
+# 功能： 将待检测曲线上每个点转到质心，再取BUBBLE_R范围内的obs点，分别转换到车身坐标系下判碰(因此很耗时，TODO(lgf):看使用聪哥的方法会好在哪里??)
 def check_car_collision(x_list, y_list, yaw_list, ox, oy, kd_tree):
     for i_x, i_y, i_yaw in zip(x_list, y_list, yaw_list):
         # 将点从后轴中心(i_x,i_y)转移到质心(cx,xy)
@@ -120,6 +120,9 @@ def pi_2_pi(angle):
     return (angle + pi) % (2 * pi) - pi
 
 
+# 输入：(x,y,yaw):待拓展的cartisian位姿; [distance,steer]:[拓展的行驶距离(正负表示方向),输入转角]; L:轴距;
+# 输出：拓展后的cartisian位姿(x,y,yaw)
+# 功能：计算从(x,y,yaw)开始，以steer转角移动distance距离后的位姿，并返回
 def move(x, y, yaw, distance, steer, L=WB):
     x += distance * cos(yaw)
     y += distance * sin(yaw)
@@ -333,9 +336,9 @@ def get_motion_model():
 XY_GRID_RESOLUTION = 2.0  # [m]
 YAW_GRID_RESOLUTION = np.deg2rad(15.0)  # [rad]
 MOTION_RESOLUTION = 0.1  # [m] path interpolate resolution (path离散化的ds)
-N_STEER = 20  # number of steer command
+N_STEER = 20  # number of steer command (转角输入采样数量。为了防止丢掉0.0,默认再加上0.0，共21个)
 
-SB_COST = 100.0  # switch back penalty cost (对rs曲线中每次正+反-行驶方向的变化施加100.0的惩罚)
+SB_COST = 100.0  # switch back penalty cost (若path中相邻2段采样曲线的正+反-行驶方向改变，则施加100.0的惩罚)
 BACK_COST = 5.0  # backward penalty cost (对rs曲线中倒车-部分长度的惩罚系数)
 STEER_CHANGE_COST = 5.0  # steer angle change penalty cost (rs曲线中正+反-同向，但是左L右R变化的惩罚系数)
 STEER_COST = 1.0  # steer angle change penalty cost (rs曲线中C段转向角steer的惩罚系数)
@@ -344,8 +347,9 @@ H_COST = 5.0  # Heuristic cost(工程上的trick)
 
 # 定义hybrid A*的节点结构体：(1) (x_index,y_index,yaw_index):栅格索引; (2) directions:行驶方向(True:正向;False:倒车),
 # 其它成员信息为该节点到goal_node的one shot的rs曲线信息：
-#   (3) (x_list,y_list,yaw_list):rs曲线离散点的位姿列表；(4) directions:每个点的行驶方向；
-#   (5) steer:转角(实际置为0.0); (6) parent_index:当前节点的位姿(x_index,y_index,yaw_index)的唯一索引;
+#   (3) (x_list,y_list,yaw_list):该Node之后控制采样得到的cartisian状态曲线(one shot时记录满足要求的rs曲线)；
+#   (4) directions:每个点的行驶方向； (5) steer:转角(实际置为0.0); 
+#   (6) parent_index:当前节点的位姿(x_index,y_index,yaw_index)的唯一索引;
 #   (7) cost:当前节点的cost + 最优rs曲线的cost.
 class Node:
     def __init__(
@@ -375,6 +379,7 @@ class Node:
         self.cost = cost
 
 
+# Path类，包含各个离散点的cartisian信息(x,y,yaw,direction)与整体的cost
 class Path:
     def __init__(self, x_list, y_list, yaw_list, direction_list, cost):
         self.x_list = x_list
@@ -412,32 +417,44 @@ class Config:
         self.yaw_w = round(self.max_yaw - self.min_yaw)
 
 
+# 功能：使用yield生成器返回“[转角,行驶方向]”采样值
 def calc_motion_inputs():
+    # 对转角输入采样。为了防止丢掉0.0,默认再加上0.0
     for steer in np.concatenate((np.linspace(-MAX_STEER, MAX_STEER, N_STEER), [0.0])):
-        for d in [1, -1]:
+        for d in [1, -1]: # 1:向前; -1:倒车;
             yield [steer, d]
 
 
 # 输入：current:待拓展节点; config:障碍物配置空间; ox,oy:实际地图; kd_tree:障碍物kd-tree;
-# 输出：
+# 输出：控制空间采样生成的无碰撞node
+# 功能：对控制空间采样，并使用yield生成器返回采样生成neighbor的无碰撞node
 def get_neighbors(current, config, ox, oy, kd_tree):
+    # 使用yield生成器返回“[转角,行驶方向]”采样值
     for steer, d in calc_motion_inputs():
+        # 在current之后的控制空间中以[steer,d]采样一段新的无碰撞曲线。并整理相关信息生成node
         node = calc_next_node(current, steer, d, config, ox, oy, kd_tree)
+        # 如果生成了node，且node在栅格地图中：yield生成器返回node
         if node and verify_index(node, config):
             yield node
 
 
+# 输入：current:待拓展节点; steer:转角采样值; direction:行驶方向采样值; config:障碍物配置空间; ox,oy:实际地图; kd_tree:障碍物kd-tree;
+# 输出：根据该段控制空间采样曲线的起点新建的Node
+# 功能：从current后接的采样曲线开始，以控制量[steer,direction]采样长度为"XY_GRID_RESOLUTION * 1.5"的曲线，如果无碰撞，则生成新的Node并返回
 def calc_next_node(current, steer, direction, config, ox, oy, kd_tree):
+    # 从该Node后接的采样曲线开始，以控制量[steer,direction]采样长度为"XY_GRID_RESOLUTION * 1.5"的曲线
     x, y, yaw = current.x_list[-1], current.y_list[-1], current.yaw_list[-1]
 
     arc_l = XY_GRID_RESOLUTION * 1.5
     x_list, y_list, yaw_list = [], [], []
     for _ in np.arange(0, arc_l, MOTION_RESOLUTION):
+        # 计算从(x,y,yaw)开始，以steer转角移动(MOTION_RESOLUTION * direction)距离后的位姿
         x, y, yaw = move(x, y, yaw, MOTION_RESOLUTION * direction, steer)
         x_list.append(x)
         y_list.append(y)
         yaw_list.append(yaw)
 
+    # 检测:自车沿该控制空间采样曲线行走时，会不会与obs产生碰撞。(False:有碰撞; True:无碰撞)
     if not check_car_collision(x_list, y_list, yaw_list, ox, oy, kd_tree):
         return None
 
@@ -446,6 +463,7 @@ def calc_next_node(current, steer, direction, config, ox, oy, kd_tree):
     y_ind = round(y / XY_GRID_RESOLUTION)
     yaw_ind = round(yaw / YAW_GRID_RESOLUTION)
 
+    # 计算这段控制空间采样曲线的代价(当前点cost + "形式方向变化，转角大小，转角变化量" + 曲线长度)
     added_cost = 0.0
 
     if d != current.direction:
@@ -459,6 +477,7 @@ def calc_next_node(current, steer, direction, config, ox, oy, kd_tree):
 
     cost = current.cost + added_cost + arc_l
 
+    # 根据该段控制空间采样曲线的起点，新建一个Node
     node = Node(
         x_ind,
         y_ind,
@@ -614,7 +633,7 @@ def calc_rs_path_cost(reed_shepp_path):
 
 
 # 输入：始末点位姿，障碍物信息，xy方向的分辨率2.0m、yaw的分辨率15deg，
-# 输出：离散的路径点(每个点的位姿(x,y,yaw))
+# 输出：从起点到终点的Path对象，包含各个离散点的cartisian信息(x,y,yaw,direction)与整体的cost
 # 功能：hybrid A*搜索.
 def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
     """
@@ -709,8 +728,11 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
             print("path found")
             break
 
+        # 对控制空间采样，并使用yield生成器返回采样生成neighbor无碰撞node
         for neighbor in get_neighbors(current, config, ox, oy, obstacle_kd_tree):
+            # 求neighbor node在栅格地图中位姿(x_index,y_index,yaw_index)的索引
             neighbor_index = calc_index(neighbor, config)
+            # 如果neighbor node已经在closedList中，则过滤；否则就进行松弛操作，并更新优先队列与openList。
             if neighbor_index in closedList:
                 continue
             if (
@@ -720,6 +742,7 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
                 heapq.heappush(pq, (calc_cost(neighbor, h_dp, config), neighbor_index))
                 openList[neighbor_index] = neighbor
 
+    # 生成从起点到终点的Path对象，包含各个离散点的cartisian信息(x,y,yaw,direction)与整体的cost
     path = get_final_path(closedList, final_path)
     return path
 
@@ -733,7 +756,10 @@ def calc_cost(n, h_dp, c):
     return n.cost + H_COST * h_dp[ind].cost # H_COST工程上的trick
 
 
+# 输入：closed:已访问过节点的dict; goal_node:可以连接到goal的最后一个Node(最后一个Node中的采样曲线一定是rs曲线);
+# 输出：生成Path对象，包含各个离散点的cartisian信息(x,y,yaw,direction)与整体的cost
 def get_final_path(closed, goal_node):
+    # 从后往前，即从goal开始一直找parent_index，生成一条逆向paht。最后再整体reverse。
     reversed_x, reversed_y, reversed_yaw = (
         list(reversed(goal_node.x_list)),
         list(reversed(goal_node.y_list)),
@@ -760,11 +786,14 @@ def get_final_path(closed, goal_node):
     # adjust first direction
     direction[0] = direction[1]
 
+    # 生成Path对象，包含各个离散点的cartisian信息(x,y,yaw,direction)与整体的cost
     path = Path(reversed_x, reversed_y, reversed_yaw, direction, final_cost)
 
     return path
 
 
+# 输入：node:Node对象; c:障碍物配置空间;
+# 输出：True:node在栅格地图中; False:node超出栅格地图
 def verify_index(node, c):
     x_ind, y_ind = node.x_index, node.y_index
     if c.min_x <= x_ind <= c.max_x and c.min_y <= y_ind <= c.max_y:
@@ -775,7 +804,7 @@ def verify_index(node, c):
 
 # 输入：current:待拓展节点; c:障碍物配置空间;
 # 输出：节点node(x_index,y_index,yaw_index)在栅格地图上的索引
-# 功能：索引的数值没关系，终点是要求每个位姿(x_index,y_index,yaw_index)的索引都是唯一的
+# 功能：求node在栅格地图中位姿(x_index,y_index,yaw_index)的索引.(注：不管索引的具体数值，只要求每个位姿的索引都是唯一的)
 def calc_index(node, c):
     ind = (
         (node.yaw_index - c.min_yaw) * c.x_w * c.y_w
@@ -857,7 +886,8 @@ def main():
     raw_oy = oy
     ox.extend(border_x)
     oy.extend(border_y)
-    # 输入障碍物信息，始末点位姿，xy方向的步长2.0m、yaw步长15deg，开始进行hybrid A*搜索.输出离散的路径点(位姿)
+    # 输入:障碍物信息，始末点位姿，xy方向的步长2.0m、yaw步长15deg，开始进行hybrid A*搜索.输出离散的路径点(位姿)
+    # 生成:从start到goal的Path对象，包含各个离散点的cartisian信息(x,y,yaw,direction)与整体的cost
     path = hybrid_a_star_planning(
         start, goal, ox, oy, XY_GRID_RESOLUTION, YAW_GRID_RESOLUTION
     )
