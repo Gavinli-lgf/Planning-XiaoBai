@@ -21,7 +21,7 @@ from curves import reeds_shepp_path_test as rs
 show_animation = True
 show_heuristic_animation = False
 
-############################ Car Info ######################################
+############################ 1. Car Info ######################################
 WB = 3.0  # rear to front wheel (轴距)
 W = 2.0  # width of car (车宽)
 LF = 3.3  # distance from rear to vehicle front end (后轴中心到车前边沿)
@@ -30,24 +30,29 @@ MAX_STEER = 0.6  # [rad] maximum steering angle (最大转向角)
 
 # distance from rear to center of vehicle. (后轴中心到质心距离)
 BUBBLE_DIST = (LF - LB) / 2.0  
-# bubble radius. (车辆原地旋转半径，即车辆对角线长度的一半)
+# bubble radius. (机器人尺寸最大半径，即车辆对角线长度的一半)
 BUBBLE_R = np.hypot((LF + LB) / 2.0, W / 2.0)  
 
 # vehicle rectangle vertices(车辆顶点，在后轴中心为原点的车身坐标系下的坐标，左前开始，顺时针方向。)
 VRX = [LF, LF, -LB, -LB, LF]
 VRY = [W / 2, -W / 2, -W / 2, W / 2, W / 2]
 
-
+# 输入： x_list,y_list,yaw_list:rs曲线上每个离散点的位姿; ox,oy:实际地图; kd_tree:障碍物kd-tree;
+# 输出： False:有碰撞; True:无碰撞
+# 功能： 将rs曲线上每个点转到质心，再取BUBBLE_R范围内的obs点，分别转换到车身坐标系下判碰(因此很耗时，TODO(lgf):看使用聪哥的方法会好在哪里??)
 def check_car_collision(x_list, y_list, yaw_list, ox, oy, kd_tree):
     for i_x, i_y, i_yaw in zip(x_list, y_list, yaw_list):
+        # 将点从后轴中心(i_x,i_y)转移到质心(cx,xy)
         cx = i_x + BUBBLE_DIST * cos(i_yaw)
         cy = i_y + BUBBLE_DIST * sin(i_yaw)
 
+        # 查找与质心(cx,xy)距离在r内的所有被obs占据的点。
         ids = kd_tree.query_ball_point([cx, cy], BUBBLE_R)
 
         if not ids:
             continue
 
+        # 将obs的笛卡尔坐标(ox,oy)转换到base link frame下判碰(False:有碰撞; True:无碰撞)
         if not rectangle_check(
             i_x, i_y, i_yaw, [ox[i] for i in ids], [oy[i] for i in ids]
         ):
@@ -56,8 +61,12 @@ def check_car_collision(x_list, y_list, yaw_list, ox, oy, kd_tree):
     return True  # no collision
 
 
+# 输入：(x,y,yaw):自车后轴中心; ox,oy:与自车质心(cx,xy)距离在BUBBLE_R内的所有点列表。
+# 输出：False:有碰撞; True:无碰撞
+# 功能：将obs的笛卡尔坐标(ox,oy)转换到base link frame下判碰
 def rectangle_check(x, y, yaw, ox, oy):
     # transform obstacles to base link frame
+    # 将cartisian坐标(ox,oy)，转换到以后轴中心为原点的车身坐标下(base link frame)
     rot = rot_mat_2d(yaw)
     for iox, ioy in zip(ox, oy):
         tx = iox - x
@@ -65,6 +74,7 @@ def rectangle_check(x, y, yaw, ox, oy):
         converted_xy = np.stack([tx, ty]).T @ rot
         rx, ry = converted_xy[0], converted_xy[1]
 
+        # 在车身坐标下判碰
         if not (rx > LF or rx < -LB or ry > W / 2.0 or ry < -W / 2.0):
             return False  # collision
 
@@ -118,7 +128,8 @@ def move(x, y, yaw, distance, steer, L=WB):
     return x, y, yaw
 
 
-############################ dynamic programming heuristic #############################
+############################ 2. dynamic programming heuristic #############################
+# Node的简化版SimpleNode,只记录栅格坐标(x,y),代价cost(默认0),父节点索引parent_index(默认-1).
 class SimpleNode:
 
     def __init__(self, x, y, cost, parent_index):
@@ -152,10 +163,13 @@ def calc_final_path(goal_node, closed_node_set, resolution):
     return rx, ry
 
 
+# 输入：目标节点的真实坐标(gx,gy);其它解释如下：
+# 输出：closed_set：已访问过节点的map(格式:Node索引，SimpleNode)
+# 功能：用Dijkstra计算从goal_node到其它所有节点，考虑障碍物不考虑动力学的单源最短路径，作为距离启发值h
 def calc_distance_heuristic(gx, gy, ox, oy, resolution, rr):
     """
     gx: goal x position [m]
-    gx: goal x position [m]
+    gy: goal y position [m]
     ox: x position list of Obstacles [m]
     oy: y position list of Obstacles [m]
     resolution: grid resolution [m]
@@ -163,24 +177,30 @@ def calc_distance_heuristic(gx, gy, ox, oy, resolution, rr):
     """
 
     goal_node = SimpleNode(round(gx / resolution), round(gy / resolution), 0.0, -1)
+    # 计算障碍物在栅格地图下的坐标列表ox,oy
     ox = [iox / resolution for iox in ox]
     oy = [ioy / resolution for ioy in oy]
 
+    # 生成机器人的配置空间(Configuration Space Obstacle)
     obstacle_map, min_x, min_y, max_x, max_y, x_w, y_w = calc_obstacle_map(
         ox, oy, resolution, rr
     )
 
+    # 定义8个方向，以及每个方向上cost
     motion = get_motion_model()
 
+    # open_set/closed_set(格式:Node索引，SimpleNode)与priority_queue(格式:代价,索引)；都是记录待访问点。
     open_set, closed_set = dict(), dict()
-    open_set[calculate_index(goal_node, x_w, min_x, min_y)] = goal_node
+    open_set[calculate_index(goal_node, x_w, min_x, min_y)] = goal_node # 把目标节点加入open_set
+    # 优先队列格式(cost, c_id)
     priority_queue = [(0, calculate_index(goal_node, x_w, min_x, min_y))]
 
     while True:
+        # 优先队列为空时，结束循环。
         if not priority_queue:
             break
-        cost, c_id = heapq.heappop(priority_queue)
-        if c_id in open_set:
+        cost, c_id = heapq.heappop(priority_queue) # 取代价最小的点
+        if c_id in open_set: # 如果当前点未访问过，则先标记为访问后，再继续后续访问处理
             current = open_set[c_id]
             closed_set[c_id] = current
             open_set.pop(c_id)
@@ -200,7 +220,7 @@ def calc_distance_heuristic(gx, gy, ox, oy, resolution, rr):
 
         # Remove the item from the open set
 
-        # expand search grid based on motion model
+        # expand search grid based on motion model(向8个方向搜索栅格的邻居节点)
         for i, _ in enumerate(motion):
             node = SimpleNode(
                 current.x + motion[i][0],
@@ -210,12 +230,15 @@ def calc_distance_heuristic(gx, gy, ox, oy, resolution, rr):
             )
             n_id = calculate_index(node, x_w, min_x, min_y)
 
+            # 如果该节点node已访问过，则continue
             if n_id in closed_set:
                 continue
 
+            # 如果node与障碍物发生碰撞，则continue
             if not verify_node(node, obstacle_map, min_x, min_y, max_x, max_y):
                 continue
 
+            # 将node加入open list或者进行松弛操作
             if n_id not in open_set:
                 open_set[n_id] = node  # Discover a new node
                 heapq.heappush(
@@ -234,6 +257,9 @@ def calc_distance_heuristic(gx, gy, ox, oy, resolution, rr):
     return closed_set
 
 
+# 输入：node:待检测节点；obstacle_map:机器人配置空间地图；min_x,min_y,max_x,max_y:配置空间边界范围；
+# 输出：node与障碍物是否有相交，False:相交；True:不相交
+# 功能：判断node与障碍物是否发生碰撞
 def verify_node(node, obstacle_map, min_x, min_y, max_x, max_y):
     if node.x < min_x:
         return False
@@ -250,6 +276,9 @@ def verify_node(node, obstacle_map, min_x, min_y, max_x, max_y):
     return True
 
 
+# 输入：ox,oy:障碍物在栅格地图下的坐标列表; 栅格分辨率resolution; 自车尺寸最大半径vr.
+# 输出：Configuration Space Obstacle: obstacle_map, min_x, min_y, max_x, max_y, x_width, y_width
+# 功能：在栅格地图中，将障碍物按照机器人最大半径进行拓展，生成配置空间(Configuration Space Obstacle)。这样机器人就可以当做点模型来搜索。
 def calc_obstacle_map(ox, oy, resolution, vr):
     min_x = round(min(ox))
     min_y = round(min(oy))
@@ -275,10 +304,15 @@ def calc_obstacle_map(ox, oy, resolution, vr):
     return obstacle_map, min_x, min_y, max_x, max_y, x_width, y_width
 
 
+# goal_node, x_w, min_x, min_y
+# 输入：SimpleNode(node);栅格地图x宽度(x_width);栅格地图x,y的最小序号:x_min,y_min.
+# 输出：node在栅格地图中的序号
+# 功能：总列数*每列的点数，生成node在栅格地图中的唯一序号
 def calculate_index(node, x_width, x_min, y_min):
     return (node.y - y_min) * x_width + (node.x - x_min)
 
 
+# 定义8个方向，以及每个方向上cost
 def get_motion_model():
     # dx, dy, cost
     motion = [
@@ -295,21 +329,24 @@ def get_motion_model():
     return motion
 
 
-############################ hybrid a star  ###########################################
+############################ 3. hybrid a star  ###########################################
 XY_GRID_RESOLUTION = 2.0  # [m]
 YAW_GRID_RESOLUTION = np.deg2rad(15.0)  # [rad]
-MOTION_RESOLUTION = 0.1  # [m] path interpolate resolution
+MOTION_RESOLUTION = 0.1  # [m] path interpolate resolution (path离散化的ds)
 N_STEER = 20  # number of steer command
 
-SB_COST = 100.0  # switch back penalty cost
-BACK_COST = 5.0  # backward penalty cost
-STEER_CHANGE_COST = 5.0  # steer angle change penalty cost
-STEER_COST = 1.0  # steer angle change penalty cost
-H_COST = 5.0  # Heuristic cost
+SB_COST = 100.0  # switch back penalty cost (对rs曲线中每次正+反-行驶方向的变化施加100.0的惩罚)
+BACK_COST = 5.0  # backward penalty cost (对rs曲线中倒车-部分长度的惩罚系数)
+STEER_CHANGE_COST = 5.0  # steer angle change penalty cost (rs曲线中正+反-同向，但是左L右R变化的惩罚系数)
+STEER_COST = 1.0  # steer angle change penalty cost (rs曲线中C段转向角steer的惩罚系数)
+H_COST = 5.0  # Heuristic cost(工程上的trick)
 
 
-# 定义hybrid A*的节点结构体：栅格索引(x,y,yaw),行驶方向(True:正向;False:倒车),
-# **列表(x,y,yaw),**方向,转角输入steer,父节点索引parent_index,代价cost.
+# 定义hybrid A*的节点结构体：(1) (x_index,y_index,yaw_index):栅格索引; (2) directions:行驶方向(True:正向;False:倒车),
+# 其它成员信息为该节点到goal_node的one shot的rs曲线信息：
+#   (3) (x_list,y_list,yaw_list):rs曲线离散点的位姿列表；(4) directions:每个点的行驶方向；
+#   (5) steer:转角(实际置为0.0); (6) parent_index:当前节点的位姿(x_index,y_index,yaw_index)的唯一索引;
+#   (7) cost:当前节点的cost + 最优rs曲线的cost.
 class Node:
     def __init__(
         self,
@@ -381,6 +418,8 @@ def calc_motion_inputs():
             yield [steer, d]
 
 
+# 输入：current:待拓展节点; config:障碍物配置空间; ox,oy:实际地图; kd_tree:障碍物kd-tree;
+# 输出：
 def get_neighbors(current, config, ox, oy, kd_tree):
     for steer, d in calc_motion_inputs():
         node = calc_next_node(current, steer, d, config, ox, oy, kd_tree)
@@ -447,6 +486,9 @@ def is_same_grid(n1, n2):
     return False
 
 
+# 输入：current:待拓展节点; goal:目标节点; ox,oy:实际地图; kd_tree:障碍物kd-tree;
+# 输出：输出46条rs曲线中，没有碰撞，且rs曲线cost最小的一条曲线
+# 功能：用rs曲线做一次从current到goal的one shot(原理见高飞视频教程)
 def analytic_expansion(current, goal, ox, oy, kd_tree):
     start_x = current.x_list[-1]
     start_y = current.y_list[-1]
@@ -456,6 +498,7 @@ def analytic_expansion(current, goal, ox, oy, kd_tree):
     goal_y = goal.y_list[-1]
     goal_yaw = goal.yaw_list[-1]
 
+    # 计算出所有的46条rs曲线(每条path都已离散化)
     max_curvature = math.tan(MAX_STEER) / WB
     paths = rs.calc_paths(
         start_x,
@@ -474,7 +517,9 @@ def analytic_expansion(current, goal, ox, oy, kd_tree):
     best_path, best = None, None
 
     for path in paths:
+        # 将rs曲线上每个点转到质心，再取BUBBLE_R范围内的obs点，分别转换到车身坐标系下判碰.(False:有碰撞; True:无碰撞)
         if check_car_collision(path.x, path.y, path.yaw, ox, oy, kd_tree):
+            # 计算每条rs曲线的代价，并记录代价最小的rs曲线
             cost = calc_rs_path_cost(path)
             if not best or best > cost:
                 best = cost
@@ -483,7 +528,11 @@ def analytic_expansion(current, goal, ox, oy, kd_tree):
     return best_path
 
 
+# 输入：current:待拓展节点; goal:目标节点; c:障碍物配置空间; ox,oy:实际地图; kd_tree:障碍物kd-tree;
+# 输出：对当前节点current做one shot的结果。结果结构：(bool:是否shot成功; Node:成功后的新节点)
+# 功能：用解析解拓展当前节点current(one shot的原理参照高飞视频)
 def update_node_with_analytic_expansion(current, goal, c, ox, oy, kd_tree):
+    # 用rs曲线做一次从current到goal的one shot(path是选出最优的一条rs曲线)
     path = analytic_expansion(current, goal, ox, oy, kd_tree)
 
     if path:
@@ -494,7 +543,9 @@ def update_node_with_analytic_expansion(current, goal, c, ox, oy, kd_tree):
         f_y = path.y[1:]
         f_yaw = path.yaw[1:]
 
+        # 当前点current的cost + rs曲线path的cost，作为f_cost
         f_cost = current.cost + calc_rs_path_cost(path)
+        # 计算current的位姿(x_index,y_index,yaw_index)的唯一索引
         f_parent_index = calc_index(current, c)
 
         fd = []
@@ -520,8 +571,12 @@ def update_node_with_analytic_expansion(current, goal, c, ox, oy, kd_tree):
     return False, None
 
 
+# 输入：reed_shepp_path:rs曲线
+# 输出：rs曲线的代价
+# 功能：对rs曲线的“长度,正+反-变化,转向角大小steer,同向的LR变化”共4种元素施加惩罚
 def calc_rs_path_cost(reed_shepp_path):
     cost = 0.0
+    # 1.根据rs曲线长度计算惩罚(倒车部分惩罚系数5.0; 正向1.0)
     for length in reed_shepp_path.lengths:
         if length >= 0:  # forward
             cost += length
@@ -529,18 +584,21 @@ def calc_rs_path_cost(reed_shepp_path):
             cost += abs(length) * BACK_COST
 
     # switch back penalty
+    # 2.对rs曲线中每次“正+反-”行驶方向的变化施加一个100.0的惩罚
     for i in range(len(reed_shepp_path.lengths) - 1):
         # switch back
         if reed_shepp_path.lengths[i] * reed_shepp_path.lengths[i + 1] < 0.0:
             cost += SB_COST
 
     # steer penalty
+    # 3.rs曲线中C段转向角的惩罚系数
     for course_type in reed_shepp_path.ctypes:
         if course_type != "S":  # curve
             cost += STEER_COST * abs(MAX_STEER)
 
-    # ==steer change penalty
+    # == steer change penalty
     # calc steer profile
+    # 4.rs曲线中正+反-同向，但是左L右R变化的惩罚系数
     n_ctypes = len(reed_shepp_path.ctypes)
     u_list = [0.0] * n_ctypes
     for i in range(n_ctypes):
@@ -601,15 +659,16 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
         [True],
     )
 
-    # hybrid A*图搜的待访问点(openList), 已访问点(closeList).
-    openList, closedList = {}, {}
+    # hybrid A*图搜的待访问点(openList), 已访问点(closeList).格式：(索引,Node)
+    openList, closedList = {}, {} # 用"{}"初始化是dict；用"[]"初始化是list。
 
-    # 计算距离启发值h
+    # 用Dijkstra计算从goal_node到其它所有节点，考虑障碍物不考虑动力学的单源最短路径，作为距离启发函数h_dp(已计算启发值的节点的map)
     h_dp = calc_distance_heuristic(
         goal_node.x_list[-1], goal_node.y_list[-1], ox, oy, xy_resolution, BUBBLE_R
     )
 
-    pq = []
+    # 将起点start_node计算cost后加入openList
+    pq = [] # list中存储元组tuple格式(cost,索引)
     openList[calc_index(start_node, config)] = start_node
     heapq.heappush(
         pq, (calc_cost(start_node, h_dp, config), calc_index(start_node, config))
@@ -621,6 +680,7 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
             print("Error: Cannot find path, No open set")
             return [], [], []
 
+        # 从openList中获取cost最小的，且未被访问过的点，继续访问
         cost, c_id = heapq.heappop(pq)
         if c_id in openList:
             current = openList.pop(c_id)
@@ -639,10 +699,12 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
             if len(closedList.keys()) % 10 == 0:
                 plt.pause(0.001)
 
+        # 用rs曲线对当前节点current做one shot(is_updated:是否更新成功; final_path:成功后生成的Node.)
         is_updated, final_path = update_node_with_analytic_expansion(
             current, goal_node, config, ox, oy, obstacle_kd_tree
         )
 
+        # one-shot成功后就跳出循环
         if is_updated:
             print("path found")
             break
@@ -662,11 +724,13 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
     return path
 
 
+# 输入：n:待计算cost的节点; h_dp:启发函数(已计算启发值的节点的map); c:障碍物配置空间(已栅格化)
+# 输出：n的代价cost=g+h（注：使用启发值h时用了工程上的trick，对h乘以5.0）
 def calc_cost(n, h_dp, c):
     ind = (n.y_index - c.min_y) * c.x_w + (n.x_index - c.min_x)
     if ind not in h_dp:
         return n.cost + 999999999  # collision cost
-    return n.cost + H_COST * h_dp[ind].cost
+    return n.cost + H_COST * h_dp[ind].cost # H_COST工程上的trick
 
 
 def get_final_path(closed, goal_node):
@@ -709,6 +773,9 @@ def verify_index(node, c):
     return False
 
 
+# 输入：current:待拓展节点; c:障碍物配置空间;
+# 输出：节点node(x_index,y_index,yaw_index)在栅格地图上的索引
+# 功能：索引的数值没关系，终点是要求每个位姿(x_index,y_index,yaw_index)的索引都是唯一的
 def calc_index(node, c):
     ind = (
         (node.yaw_index - c.min_yaw) * c.x_w * c.y_w
