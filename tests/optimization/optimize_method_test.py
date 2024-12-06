@@ -1,3 +1,4 @@
+# sympy是处理函数表示的一个库。输入"函数表达式function,变量对象symbols,函数点x0"后，可以计算function在x0处的一阶/二阶导数矩阵
 import sympy as sm
 import numpy as np
 import matplotlib.pyplot as plt
@@ -14,7 +15,9 @@ from common.gif_creator import *
 from common.plot_util import *
 
 
-# 计算一阶雅可比矩阵
+# 功能：计算函数function在给定点x0处的梯度
+# 输入解释如下，实际输入为：function, symbols, dict(zip(x0.keys(), x_star[i]))
+# 输出：function在x0处的梯度数组numpy.ndarray
 def get_gradient(
     function: sm.core.expr.Expr,
     symbols: list[sm.core.symbol.Symbol],
@@ -71,7 +74,9 @@ def get_hessian(
     return hessian.astype(np.float64)
 
 
-# 牛顿法
+# 功能：牛顿法求最优解
+# 输入形参解释如下,实际输入为:rosenbrock_function(x, y), symbols, {x: -2, y: 2}
+# 输出：最优解dict[sm.core.symbol.Symbol, float] or None
 def newton_method(
     function: sm.core.expr.Expr,
     symbols: list[sm.core.symbol.Symbol],
@@ -98,11 +103,15 @@ def newton_method(
 
     for i in range(iterations):
 
+        # 计算函数function在给定点x0处的梯度(一阶导数)
         gradient = get_gradient(function, symbols, dict(zip(x0.keys(), x_star[i])))
+        # 计算函数function在给定点x0处的海森矩阵(二阶导数)
         hessian = get_hessian(function, symbols, dict(zip(x0.keys(), x_star[i])))
 
+        # 决策变量的更新公式
         x_star[i + 1] = x_star[i].T - np.linalg.inv(hessian) @ gradient.T
 
+        # 决策变量变化量<阈值,得到最优解
         if np.linalg.norm(x_star[i + 1] - x_star[i]) < 10e-5:
             solution = dict(zip(x0.keys(), x_star[i + 1]))
             print(f"\nConvergence Achieved ({i+1} iterations): Solution = {solution}")
@@ -115,7 +124,9 @@ def newton_method(
     return solution, x_star
 
 
-# 梯度下降法
+# 功能：梯度下降法
+# 输入形参解释如下,实际输入为:rosenbrock_function(x, y), symbols, {x: -2, y: 2}
+# 输出：最优解dict[sm.core.symbol.Symbol, float] or None
 def gradient_descent(
     function: sm.core.expr.Expr,
     symbols: list[sm.core.symbol.Symbol],
@@ -130,23 +141,29 @@ def gradient_descent(
         function (sm.core.expr.Expr): The function to be optimized.
         symbols (list[sm.core.symbol.Symbol]): The symbols used in the function.
         x0 (dict[sm.core.symbol.Symbol, float]): The initial values for the symbols.
-        learning_rate (float, optional): The learning rate for the optimization. Defaults to 0.1.
-        iterations (int, optional): The maximum number of iterations. Defaults to 100.
+        learning_rate (float, optional): The learning rate for the optimization. Defaults to 0.1. (步长)
+        iterations (int, optional): The maximum number of iterations. Defaults to 100. (最大迭代次数)
 
     Returns:
         dict[sm.core.symbol.Symbol, float] or None: The solution found by the optimization, or None if no solution is found.
     """
+
+    # 定义最优解变量x_star (是一个dict,格式{key:迭代序号; val:该次迭代的解})
     x_star = {}
     x_star[0] = np.array(list(x0.values()))
 
     print(f"Starting Values: {x_star[0]}")
 
+    # 开始迭代求解
     for i in range(iterations):
 
+        # 用sympy库计算function在x0处的梯度gradient
         gradient = get_gradient(function, symbols, dict(zip(x0.keys(), x_star[i])))
 
+        # 决策变量的更新公式
         x_star[i + 1] = x_star[i].T - learning_rate * gradient.T
 
+        # "决策变量变化量<阈值"时终止迭代，得到最优解
         if np.linalg.norm(x_star[i + 1] - x_star[i]) < 10e-5:
             solution = dict(zip(x0.keys(), x_star[i + 1]))
             print(f"\nConvergence Achieved ({i+1} iterations): Solution = {solution}")
@@ -163,13 +180,15 @@ def rosenbrock_function(x, y):
     return 100 * (y - x**2) ** 2 + (1 - x) ** 2
 
 
-# 输入：待使用方法的函数名
+# 功能：使用优化方法method求最优解,并画图
 def optimize(method):
     x, y = sm.symbols("x y")
     symbols = [x, y]
 
+    # 调用优化方法method求最优解
     solution, x_star = method(rosenbrock_function(x, y), symbols, {x: -2, y: 2})
 
+    # 画图
     for x_i in x_star.values():
         plt.cla()
         xs, ys, zs = [], [], []

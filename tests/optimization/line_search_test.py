@@ -12,11 +12,12 @@ from common.gif_creator import *
 from common.plot_util import *
 from tests.optimization.optimize_method_test import *
 
-
+# 计算函数在x点的值
 def function(x) -> float:
     return x[0] ** 2 + 6 * x[1] ** 2
 
 
+# 计算函数在x点的梯度值
 def function_gradient(x):
     return np.array([x[0] * 2, x[1] * 12])
 
@@ -89,13 +90,18 @@ def wolfe(x, d):
     return alpha
 
 
+# 输入： x0:初始值; line_search:线搜索方法函数; iterations:最大迭代次数;
+# 输出： solution:; x_i:;
 def gradient_descent_optimize(x0, line_search, iterations=1000):
+    # 记录每次梯度下降法得到的x值
     x_i = [x0]
     for i in range(iterations):
         gradient = function_gradient(x_i[i])
+        # 通过线搜索方法得到步长alpha
         alpha = line_search(x_i[i], -gradient)
         x_i.append(x_i[i] - alpha * gradient)
 
+        # 梯度下降法结束的判断(梯度约等于0时，找到最优解)
         if np.linalg.norm(gradient) < 10e-5:
             solution = x_i[i + 1]
             print(f"\nConvergence Achieved ({i+1} iterations): Solution = {solution}")
@@ -109,12 +115,15 @@ def gradient_descent_optimize(x0, line_search, iterations=1000):
 
 
 def line_search_test():
+    # 定义初始点
     x0 = np.array([-5, 8])
 
+    # 分别用3中不同的线搜索方法，得到优化结果
     solution, armijo_x_i = gradient_descent_optimize(copy.deepcopy(x0), armijo)
     solution, goldstein_x_i = gradient_descent_optimize(copy.deepcopy(x0), goldstein)
     solution, wolfe_x_i = gradient_descent_optimize(copy.deepcopy(x0), wolfe)
 
+    # 画图
     fig, ax = plt.subplots()
     plot_x_0 = [x_i[0] for x_i in armijo_x_i]
     plot_x_1 = [x_i[1] for x_i in armijo_x_i]
