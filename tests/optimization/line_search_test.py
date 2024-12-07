@@ -22,10 +22,14 @@ def function_gradient(x):
     return np.array([x[0] * 2, x[1] * 12])
 
 
+# 输入：x:当前的搜索点; d:梯度的负方向; 实际输入：x_i[i], -gradient
+# 输出：满足armijo条件的步长alpha
+# 功能：输入初始步长alpha为1.0，如果该步长不满足armijo条件，怎每次将步长变为原来的0.9倍，直到找到满足条件的步长并返回。
+#      (注：取方向与梯度点积，相当于取梯度的平方的负数。即为了提出梯度正负的影响，保证armijo条件的后半部分是小于0的。)
 def armijo(x, d) -> float:
     c1 = 1e-3
     gamma = 0.9
-    alpha = 1.0
+    alpha = 1.0 # 初始步长
 
     while function(x + alpha * d) > function(x) + c1 * alpha * np.dot(
         function_gradient(x).T, d
@@ -34,15 +38,19 @@ def armijo(x, d) -> float:
     return alpha
 
 
+# 输入：x:当前的搜索点; d:梯度的负方向; 实际输入：x_i[i], -gradient
+# 输出：满足goldstein条件的步长alpha
+# 功能：c1与c2给定后不再改变。改定初始步长1.0(alpha)后，如果步长太大或者太小，缩放步长使f(x+alpha*d)落在l1~l2之间
 def goldstein(x, d):
 
-    a = 0
-    b = np.inf
-    alpha = 1
-    c1 = 0.1  # 可接受系数
-    c2 = 1 - c1
-    beta = 2  # 试探点系数
+    a = 0       # a,b是在步长太大或者太小时，缩放步长时使用的
+    b = np.inf  # 同上
+    alpha = 1   # 步长
+    c1 = 0.1    # 可接受系数
+    c2 = 1 - c1 # (c1取0.0~0.5，是为了保证c2>c1,且两者都属于0.0~1.0)
+    beta = 2    # 试探点系数(如果步长太小时，使用的放大系数)
 
+    # 当更新步长时，两次步长插值的绝对值<1e-5时，会强制结束
     while np.fabs(a - b) > 1e-5:
         if function(x + alpha * d) <= function(x) + c1 * alpha * np.dot(
             function_gradient(x).T, d
@@ -50,8 +58,10 @@ def goldstein(x, d):
             if function(x + alpha * d) >= function(x) + c2 * alpha * np.dot(
                 function_gradient(x).T, d
             ):
+                # 3. f(x+alpha*d)满足<l1, >l2，即落在两条直线中间。结束循环
                 break
             else:
+                # 2. f(x+alpha*d)满足<l1，<l2说明步长太小需要放大。若步长原来用0.5缩小过，则让步长靠近b;否则每次将步长放大2倍
                 a = alpha
                 # alpha = (a + b) / 2
                 if b < np.inf:
@@ -59,19 +69,25 @@ def goldstein(x, d):
                 else:
                     alpha = beta * alpha
         else:
+            # 1. f(x+alpha*d) > l1,也肯定>l2(即连Armijo都不满足),说明步长太大需要缩小。调整步长alpha，每次缩短为原来的1/2
             b = alpha
             alpha = (a + b) / 2
 
     return alpha
 
 
+# 输入：x:当前的搜索点; d:梯度的负方向; 实际输入：x_i[i], -gradient
+# 输出：满足Wolfe条件的步长alpha
+# 功能：c1,c2取经验值且不再变。改定初始步长1.0(alpha)后，如果步长太大或者太小，缩放步长以满足Wolfe条件
 def wolfe(x, d):
 
     c1 = 0.3
     c2 = 0.9
-    alpha = 1
-    a = 0
-    b = np.inf
+    alpha = 1   # 步长
+    a = 0       # a,b是在步长太大或者太小时，缩放步长时使用的
+    b = np.inf  # 同上
+
+    # 当*时，会强制结束
     while a < b:
         if function(x + alpha * d) <= function(x) + c1 * alpha * np.dot(
             function_gradient(x).T, d
@@ -79,11 +95,14 @@ def wolfe(x, d):
             if np.dot(function_gradient(x + alpha * d).T, d) >= c2 * alpha * np.dot(
                 function_gradient(x).T, d
             ):
+                # 3. 满足Wolfe条件，返回
                 break
             else:
+                # 2. 如果满足Armijo条件，但不满足Wolfe准则，则放大alpha逐渐靠近b
                 a = alpha
                 alpha = (a + b) / 2
         else:
+            # 1. f(x+alpha*d) > l(即不满足Armijo条件),说明步长太大需要缩小。调整步长alpha，每次缩短为原来的1/2
             b = alpha
             alpha = (a + b) / 2
 
