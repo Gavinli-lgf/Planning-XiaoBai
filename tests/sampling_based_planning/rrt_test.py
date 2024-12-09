@@ -43,6 +43,7 @@ class RRT:
             self.ymin = float(area[2])
             self.ymax = float(area[3])
 
+    # 构造函数输入: 介绍如下
     def __init__(
         self,
         start,
@@ -277,6 +278,7 @@ class RRT:
         return d, theta
 
 
+# 在二维空间设置6个圆形障碍物[x, y, radius]
 def construct_env_info():
     # Set obstacle list info [x, y, radius].
     obstacleList = [
@@ -291,9 +293,11 @@ def construct_env_info():
     return obstacleList
 
 
+# 
 def main(gx=6.0, gy=14.0):
     print("start " + __file__)
     # Construct environment: map, obstacles, etc.
+    # 在二维空间设置6个圆形障碍物[x, y, radius]
     obstacle_list = construct_env_info()
 
     # Set Initial parameters
