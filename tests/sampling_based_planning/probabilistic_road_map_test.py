@@ -16,8 +16,8 @@ from common.gif_creator import *
 from common.common_util import *
 
 # hyper parameter, and they can be adjusted.
-N_SAMPLE = 500  # number of sample_points
-N_KNN = 10  # number of edge from one sampled point
+N_SAMPLE = 500  # number of sample_points(采样点的数量)
+N_KNN = 10  # number of edge from one sampled point(限制PRM中，每个点最多与另外10个点相连)
 MAX_EDGE_LEN = 30.0  # [m] Maximum edge length
 
 show_animation = True
@@ -43,6 +43,9 @@ class Node:
         )
 
 
+# 输入：输入参数解释如下
+# 输出：规划路径坐标rx,ry
+# 功能：prm规划的主体功能，生成障碍物的KDTree,学习阶段,查询阶段,生成prm规划结果
 def prm_planning(
     start_x,
     start_y,
@@ -61,14 +64,16 @@ def prm_planning(
     :param start_y: start y position
     :param goal_x: goal x position
     :param goal_y: goal y position
-    :param obstacle_x_list: obstacle x positions
-    :param obstacle_y_list: obstacle y positions
+    :param obstacle_x_list: obstacle x positions(包括边界)
+    :param obstacle_y_list: obstacle y positions(包括边界)
     :param robot_radius: robot radius
     :param rng: (Optional) Random generator
     :return:
     """
+    # 1. 生成障碍物(包括边界)的KDTree
     obstacle_kd_tree = KDTree(np.vstack((obstacle_x_list, obstacle_y_list)).T)
 
+    # 2. 均匀随机采样，丢弃与障碍物碰撞的点
     # Uniform random sampling, and discard points that collide with obstacles.
     sample_x, sample_y = sample_points(
         start_x,
@@ -84,8 +89,10 @@ def prm_planning(
     if show_animation:
         plt.plot(sample_x, sample_y, ".b")
 
+    # 3. 生成PRM的邻接表，邻接表中存储了距离每个采样点最近的前N_KNN个无碰撞的边
     road_map = generate_road_map(sample_x, sample_y, robot_radius, obstacle_kd_tree)
 
+    # 4. 在路图中使用dijkstra搜索得到start到goal的路径rx,ry
     rx, ry = dijkstra_planning(
         start_x, start_y, goal_x, goal_y, road_map, sample_x, sample_y
     )
@@ -93,6 +100,9 @@ def prm_planning(
     return rx, ry
 
 
+# 输入：sx, sy, gx, gy, rr, obstacle_kd_tree:起点坐标，终点坐标，obs尺寸半径，obs的KDTree
+# 输出：True:有碰撞; False:无碰撞;
+# 功能：对(sx,sy)到(gx,gy)的直线，以rr的间隔采样，判断每个采样点与obs是否有碰撞(包括距离obs<rr)
 def is_collision(sx, sy, gx, gy, rr, obstacle_kd_tree):
     x = sx
     y = sy
@@ -107,6 +117,7 @@ def is_collision(sx, sy, gx, gy, rr, obstacle_kd_tree):
     D = rr
     n_step = round(d / D)
 
+    # 增量式取点，判断边与obs是否碰撞(包括距离obs<rr)
     for i in range(n_step):
         dist, _ = obstacle_kd_tree.query([x, y])
         if dist <= rr:
@@ -122,6 +133,9 @@ def is_collision(sx, sy, gx, gy, rr, obstacle_kd_tree):
     return False  # OK
 
 
+# 输入：sample_x, sample_y, robot_radius, obstacle_kd_tree
+# 输出：road_map
+# 功能：生成PRM的邻接表，邻接表中存储了距离每个采样点最近的前N_KNN个无碰撞的边
 def generate_road_map(sample_x, sample_y, rr, obstacle_kd_tree):
     """
     Road map generation
@@ -132,22 +146,28 @@ def generate_road_map(sample_x, sample_y, rr, obstacle_kd_tree):
     obstacle_kd_tree: KDTree object of obstacles
     """
 
+    # 生成的PRM路图以临界表的方式存储
     road_map = []
     n_sample = len(sample_x)
+    # 生成采样点的KDTree
     sample_kd_tree = KDTree(np.vstack((sample_x, sample_y)).T)
 
     for i, ix, iy in zip(range(n_sample), sample_x, sample_y):
-
+        # 在采样点的KDTree中查找距离(ix,iy)最近的前n_sample个点。且查询结果"dists(距离),indexes(索引)"按照由近到远的方式排列
         dists, indexes = sample_kd_tree.query([ix, iy], k=n_sample)
-        edge_id = []
+        # 邻接表中点(ix,iy)的所有出度点
+        edge_id = [] 
 
+        # 查找距离(ix,iy)最近的前N_KNN个无碰撞的边，并将出度存储在edge_id中
         for ii in range(1, len(indexes)):
             nx = sample_x[indexes[ii]]
             ny = sample_y[indexes[ii]]
 
+            # 对(ix,iy)到(nx,ny)的直线，以rr的间隔采样，判断每个采样点与obs是否有碰撞(包括距离obs<rr)
             if not is_collision(ix, iy, nx, ny, rr, obstacle_kd_tree):
                 edge_id.append(indexes[ii])
 
+            # PRM中每个点最多与其他N_KNN个点连接生成边
             if len(edge_id) >= N_KNN:
                 break
 
@@ -253,6 +273,9 @@ def plot_road_map(road_map, sample_x, sample_y):  # pragma: no cover
             plt.plot([sample_x[i], sample_x[ind]], [sample_y[i], sample_y[ind]], "-k")
 
 
+# 功能：均匀随机采样，丢弃与障碍物碰撞的点("与obs距离<robot_radius"的也叫碰撞)
+# 输入：start_x, start_y, goal_x, goal_y, robot_radius, obstacle_x_list, obstacle_y_list, obstacle_kd_tree, rng
+# 输出：采样点sample_x,sample_y
 def sample_points(sx, sy, gx, gy, rr, ox, oy, obstacle_kd_tree, rng):
     max_x = max(ox)
     max_y = max(oy)
@@ -261,9 +284,11 @@ def sample_points(sx, sy, gx, gy, rr, ox, oy, obstacle_kd_tree, rng):
 
     sample_x, sample_y = [], []
 
+    # lgf推断np.random.default_rng()生成0.0~1.0之间的随机数
     if rng is None:
         rng = np.random.default_rng()
 
+    # 采样与obs无碰撞的点个数为N_SAMPLE个
     while len(sample_x) <= N_SAMPLE:
         tx = (rng.random() * (max_x - min_x)) + min_x
         ty = (rng.random() * (max_y - min_y)) + min_y
@@ -282,13 +307,15 @@ def sample_points(sx, sy, gx, gy, rr, ox, oy, obstacle_kd_tree, rng):
     return sample_x, sample_y
 
 
+# 功能：构建地图与障碍物信息。被地图边界、障碍物所占据的区域，分别记录在border_x,border_y与ox,oy中
+# (与图搜的区别是:不用栅格化)
 def construct_env_info():
     ox = []
     oy = []
     border_x = []
     border_y = []
 
-    # road border.
+    # road border.(60m*60m的地图)
     for i in range(0, 60, 1):
         border_x.append(i)
         border_y.append(0.0)
@@ -322,9 +349,12 @@ def construct_env_info():
     return border_x, border_y, ox, oy
 
 
+# Probabilistic Road Map实现主体
+# 输入：可选项 rng(随机生成器)
 def prm(rng=None):
     print("Begin to run the prm!!!")
 
+    # 1. 定义已知量:起始点，机器人尺寸
     # start and goal position.
     start_x = 10.0  # [m]
     start_y = 10.0  # [m]
@@ -332,6 +362,7 @@ def prm(rng=None):
     goal_y = 50.0  # [m]
     robot_size = 5.0  # [m]
 
+    # 2. 构建地图与障碍物信息(与图搜的区别是:不用栅格化)
     # construct environment info.
     border_x, border_y, ox, oy = construct_env_info()
 
@@ -343,6 +374,7 @@ def prm(rng=None):
         plt.grid(True)
         plt.axis("equal")
 
+    # 3. prm(概率路图规划),返回规划结果rx,ry
     # run the prm planning.
     ox.extend(border_x)
     oy.extend(border_y)
