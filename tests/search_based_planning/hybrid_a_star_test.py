@@ -24,7 +24,7 @@ show_heuristic_animation = False
 ############################ 1. Car Info ######################################
 WB = 3.0  # rear to front wheel (轴距)
 W = 2.0  # width of car (车宽)
-LF = 3.3  # distance from rear to vehicle front end (后轴中心到车前边沿)
+LF = 3.3  # distance from rear to vehicle front end (后轴中心到车前边沿:bash link 2 front)
 LB = 1.0  # distance from rear to vehicle back end (后轴中心到车后边沿)
 MAX_STEER = 0.6  # [rad] maximum steering angle (最大转向角)
 
